@@ -1,0 +1,7 @@
+```{r}
+system("git add .")
+system('git commit -m "Add new QMD file"')
+system("git push")
+
+```
+
