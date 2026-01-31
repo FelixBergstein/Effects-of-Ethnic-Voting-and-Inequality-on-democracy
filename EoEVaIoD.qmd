@@ -4,9 +4,6 @@ output: html_document
 date: "2026-01-31"
 ---
 
-
-
-
 #Packages
 ```{r Packages}
 knitr::opts_chunk$set(echo = TRUE)
@@ -39,10 +36,10 @@ rm(p_needed)
 
 #Load data
 
-```{r}
-combined_data10 <- read.csv("data/combined_data10.csv")
+```{r, load data}
+combined_data10 <- read.csv("combined_data10.csv")
 
-combined_data14 <- read_csv("data/combined_data14.csv")
+combined_data14 <- read_csv("combined_data14.csv")
 ```
 
 
