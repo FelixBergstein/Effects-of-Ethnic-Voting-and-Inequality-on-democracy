@@ -1,0 +1,760 @@
+---
+title: "Repliction Code for "Effects of Ethnic Voting and Inequality on Democracy" https://doi.org/10.33063/pbj.v12i2025.704
+output: html_document
+date: "2024-05-28"
+---
+
+
+```{r}
+# ===============================
+# FINAL FIX: IDENTIFY + COMMIT + PUSH
+# ===============================
+
+# 0. Confirm files are there
+getwd()
+list.files()
+
+# 1. Tell Git who you are (GLOBAL, do this once)
+system('git config --global user.name "Felix Bergstein"')
+system('git config --global user.email "felix.bergstein@uni-mannheim.de"')
+# (email does NOT have to match GitHub, just be valid)
+
+# 2. Add files
+system("git add .")
+
+# 3. Commit (this WILL work now)
+system('git commit -m "Add QMD file"')
+
+# 4. Ensure branch is main
+system("git branch -M main")
+
+# 5. Push to GitHub
+system("git push -u origin main")
+
+cat("✅ QMD file successfully uploaded to GitHub\n")
+
+```
+
+
+#Packages
+```{r Packages}
+knitr::opts_chunk$set(echo = TRUE)
+#Vector for packages
+p_needed <- c(
+  "tidyverse",
+  "modelsummary",
+  "knitr",
+  "kableExtra",
+  "vdemdata",
+  "haven",
+  "censReg",
+  "cowplot",
+  "ggeffects"
+)
+
+# check if they are already installed, install if not installed
+lapply(
+  p_needed[!(p_needed %in% rownames(installed.packages()))],
+  install.packages
+)
+
+# load the packages
+lapply(p_needed, library, character.only = TRUE)
+
+# remove object after installation  
+rm(p_needed)
+
+```
+
+
+#Data stuff
+##Loading Data and first changes
+```{r vdem}
+vdem <- vdem
+
+# Keep only selected variables
+vdem <- subset(vdem, select = c("country_name", "year", "v2peapssoc", "v2x_polyarchy"))
+
+vdem <- na.omit(vdem)
+
+
+# Find the minimum and maximum values of v2peapssoc
+min_v2peapssoc <- min(vdem$v2peapssoc, na.rm = T)
+max_v2peapssoc <- max(vdem$v2peapssoc, na.rm = T)
+
+# Reverse v2peapssoc
+vdem$reversed_v2peapssoc <- max_v2peapssoc + min_v2peapssoc - vdem$v2peapssoc
+
+# Now, recode the reversed variable to range from 0 to 1
+min_reversed <- min(vdem$reversed_v2peapssoc, na.rm = T)
+max_reversed <- max(vdem$reversed_v2peapssoc, na.rm = T)
+vdem$new_reversed <- (vdem$reversed_v2peapssoc - min_reversed) / (max_reversed - min_reversed)
+
+# Check the minimum and maximum values of the new reversed variable
+min_new_reversed <- min(vdem$new_reversed)
+max_new_reversed <- max(vdem$new_reversed)
+
+# Print the minimum and maximum values of the new reversed variable
+cat("Minimum new_reversed:", min_new_reversed, "\n")
+cat("Maximum new_reversed:", max_new_reversed, "\n")
+
+#Fix country names
+vdem[vdem$country_name == "United States of America", "country_name"] <- "United States"
+vdem[vdem$country_name == "North Macedonia", "country_name"] <- "Macedonia"
+```
+
+```{r other datasets}
+
+#Huber and Baldwin 2010, BGI and public goods
+baldwin <- read_dta("baldwin.dta")
+baldwin[baldwin$country == "USA", "country"] <- "United States"
+badlwin <- baldwin[!is.na(baldwin$pg), ]
+
+#Houle 2018
+houledata <- read_dta("Ethnic Voting FDEM - Replication.dta")
+
+war_countries <- c(
+  "burundi", "croatia", "georgia", "guatemala", "india",
+  "indonesia", "iraq", "kenya", "macedonia", "moldova", "senegal"
+)
+
+houledata$war <- ifelse(tolower(houledata$country) %in% war_countries, 1, 0)
+
+
+```
+
+##Merging Data
+```{r merging data: 10; Baldwin 2010}
+# Merge datasets based on country and year
+combined_data10 <- merge(houledata, baldwin, by.x = c("country"), by.y = c("country"))
+combined_data10 <- merge(combined_data10, vdem, by.x = c("country", "year.x"), by.y = c("country_name", "year"))
+combined_data10 <- na.omit(combined_data10)
+
+
+
+min_between <- min(combined_data10$betweenstd)
+max_between <- max(combined_data10$betweenstd)
+
+# Create 'bgi' variable
+combined_data10$bgi <- (combined_data10$betweenstd - min_between) / (max_between - min_between)
+
+
+```
+
+```{r merging data: 14; Vdem}
+
+combined_data14 <- merge(houledata, vdem, by.x = c("country", "year"), by.y = c("country_name", "year"))
+
+
+#Rename the variable for Horizontal Inequality
+combined_data14 <- combined_data14 %>% 
+  rename(bgi = new_reversed)
+
+# Lag the v2x_polyarchy variable
+combined_data14 <- combined_data14 %>%
+  arrange(country, year) %>%  # Ensure the data is sorted by country and year
+  group_by(country) %>%
+  mutate(lagged_v2x_polyarchy = lag(v2x_polyarchy, n = 1))
+
+```
+
+#Descriptives
+```{r Table of all countries}
+# Create a summary table showing the range of years for each country
+country_year_range <- combined_data14 %>%
+  group_by(country) %>%
+  summarize(
+    min_year = min(year, na.rm = TRUE),
+    max_year = max(year, na.rm = TRUE)
+  )
+
+# Print the summary table
+print(country_year_range)
+
+# Create and save the HTML table with a title
+kable(country_year_range, format = "html", table.attr = "style='width:100%;'", caption = "Table 2: Country and Years Covered by the Analysis") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  save_kable(file = "country_year_range.html")
+
+```
+
+```{r correlation matrix}
+# Subset the data
+data_subset <- combined_data14[, c("lgvf", "lgvp", "lpvf", "lpvp")]
+
+# Calculate the correlation matrix
+correlation_matrix <- cor(data_subset, use = "complete.obs")
+
+# Create a lower triangular matrix by setting the upper triangle to an empty string
+lower_tri <- correlation_matrix
+lower_tri[upper.tri(lower_tri)] <- ""
+
+# Rename the columns and rows
+colnames(lower_tri) <- c("GVF", "GVP", "PVF", "PVP")
+rownames(lower_tri) <- c("GVF", "GVP", "PVF", "PVP")
+
+# Convert to dataframe for better display
+lower_tri_df <- as.data.frame(lower_tri)
+
+# Create the HTML table using kable
+html_table <- kable(lower_tri_df, format = "html", digits = 2, col.names = c("GVF", "GVP", "PVF", "PVP"), row.names = TRUE) %>%
+  kable_styling(full_width = FALSE, position = "left") %>%
+  add_header_above(c(" " = 1, "Correlation of Ethnic Voting Measures" = 4))
+
+#Print the table
+print(html_table)
+
+# Save the HTML table to a file
+save_kable(html_table, file = "correlation_matrix.html")
+```
+
+
+#Replicating Houle (2018)
+
+```{r regression replicating Houle}
+lm1 <- censReg(polity2_norm ~ lpolity2_norm + lgvf  + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = houledata)
+
+lm2 <- censReg(polity2_norm ~ lpolity2_norm + lgvp + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = houledata)
+
+lm3 <- censReg(polity2_norm ~ lpolity2_norm + lpvf + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = houledata)
+
+lm4 <- censReg(polity2_norm ~ lpolity2_norm + lpvp + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = houledata)
+
+table_summary <- modelsummary(list(lm1, lm2, lm3, lm4), stars = TRUE)
+print(table_summary)
+```
+
+```{r regression table: Houle replication}
+# Generate the table
+table_html <- modelsummary(
+  models = list(
+    "Model 1 \n (GVF)" = lm1,
+    "Model 2 \n (GVP)" = lm2, 
+    "Model 3 \n (PVF)" = lm3, 
+    "Model 4 \n (PVP)" = lm4
+  ),
+  title = "The effect of Ethnic Voting on democracy",
+  gof_omit = "RMSE",
+  align = "lcccc", # left-align first column, center others
+  coef_map = c(     # change order and names of coefs
+    "(Intercept)" = "Intercept", 
+    "lpolity2_norm" = "Lagged DV",
+    "lgvf" = "Ethnic voting",
+    "lgvp" = "Ethnic voting",
+    "lpvf" = "Ethnic voting",
+    "lpvp" = "Ethnic voting",
+    "llngdppc" = "GDP p.c.",
+    "lgrowth" = "growth",
+    "oil" = "oil",
+    "lethnici" = "Ethnic fractionalization",
+    "lreligioni" = "Religious  fractionalization",
+    "lmoslemi" = "Muslim",
+    "lproti" = "Protestant",
+    "lbritcoli" = "British colony",
+    "lnewci" = "New country",
+    "pr" = "PR",
+    "federalism" = "Federalism",
+    "lage" = "Age",
+    "western" = "Western",
+    "lworld_polity" = "World Democracy",
+    "lb_dum" = "LB",
+    "ab_dum" = "AB",
+    "cses_dum" = "CSES",
+    "dec90" = "1990s",
+    "dec2000" = "2000s",
+    "EP_std" = "EP",
+    "ELF_std" = "ELF",
+    "polity2_std" = "polity",
+    "lngdp_std" = "GDP"
+  ),
+  stars = TRUE # include p-values
+) %>%
+  kableExtra::add_header_above( # add an extra row with
+    c(" " = 1, # nothing in column 1
+      "DV: Democracy" = 4), # "DV.." spread across all 4 columns with models
+    bold = FALSE,
+    italic = TRUE
+  ) %>%
+  kableExtra::column_spec(2:5, width = "2cm") # set the size of 2-5 columns in table to 2 cm
+
+print(table_html)
+
+# Save the table as an HTML file
+save_kable(table_html, "regression_table2.html")
+
+```
+
+
+#Main Analysis
+
+##Baldwin and Huber (2010) measure
+```{r regression: combined_data10, Baldwin & Huber}
+lm1 <- censReg(polity2_norm ~ lpolity2_norm + lgvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data10)
+
+lm2 <- censReg(polity2_norm ~ lpolity2_norm + lgvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data10)
+
+lm3 <- censReg(polity2_norm ~ lpolity2_norm + lpvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data10)
+
+lm4 <- censReg(polity2_norm ~ lpolity2_norm + lpvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data10)
+
+table_summary <- modelsummary(list(lm1, lm2, lm3, lm4), stars = TRUE)
+print(table_summary)
+```
+
+```{r regression table combined_data10}
+# Create the regression table with modelsummary
+reg_table <- modelsummary(
+  models = list(
+  "Model 1: \n GVF" = lm1,
+  "Model 2: \n GVP" = lm2, 
+  "Model 3: \n PVF" = lm3, 
+  "Model 4: \n PVP" = lm4
+),
+  title = "The effect of Ethnic Voting on Democracy, alternative Inequality measure",
+  gof_map = c("r.squared", "adj.r.squared", "nobs"),
+  align = "lcccc", # left-align first column, center others
+  coef_map = c(     # change order and names of coefs
+    "(Intercept)" = "Intercept", 
+    "lpolity2_norm" = "Lagged DV",
+    "lgvf" = "Ethnic Voting",
+    "lgvp" = "Ethnic Voting",
+    "lpvf" = "Ethnic Voting",
+    "lpvp" = "Ethnic Voting",
+    "bgi" = "Horizontal Inequality",
+    "lgvf:bgi" = "EV * HI",
+    "lgvp:bgi" = "EV * HI",
+    "lpvf:bgi" = "EV * HI",
+    "lpvp:bgi" = "EV * HI",
+    "llngdppc" = "GDP p.c.",
+    "lgrowth" = "Growth",
+    "oil" = "Oil",
+    "lethnici" = "Ethnic fractionalization",
+    "lreligioni" = "Religious fractionalization",
+    "lmoslemi" = "Muslim",
+    "lproti" = "Protestant",
+    "lbritcoli" = "British colony",
+    "lnewci" = "New country",
+    "pr" = "PR",
+    "federalism" = "Federalism",
+    "lage" = "Age",
+    "western" = "Western",
+    "lworld_polity" = "World Democracy",
+    "lb_dum" = "LB",
+    "ab_dum" = "AB",
+    "cses_dum" = "CSES",
+    "dec90" = "1990s",
+    "dec2000" = "2000s",
+    "EP_std" = "EP",
+    "ELF_std" = "ELF",
+    "polity2_std" = "polity",
+    "lngdp_std" = "GDP"
+  ),
+  stars = TRUE # include p-values
+) %>%
+  kableExtra::add_header_above(
+    c(" " = 1, # nothing in column 1
+      "DV: Polity Score" = 4),
+    bold = FALSE,
+    italic = TRUE) %>%
+  kableExtra::column_spec(2:5, width = "2cm") # set the size of 2-6 columns in table to 2 cm
+
+print(reg_table)
+
+# Save the table as an HTML file
+save_kable(reg_table, file = "regression_table4.html")
+```
+
+
+##Main regression, Polity measure
+```{r regression: combined_data14}
+lm1 <- censReg(polity2_norm ~ lpolity2_norm + lgvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data14)
+
+lm2 <- censReg(polity2_norm ~ lpolity2_norm + lgvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data14)
+
+lm3 <- censReg(polity2_norm ~ lpolity2_norm + lpvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data14)
+
+lm4 <- censReg(polity2_norm ~ lpolity2_norm + lpvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, right=1, data = combined_data14)
+
+table_summary <- modelsummary(list(lm1, lm2, lm3, lm4), stars = TRUE)
+print(table_summary)
+```
+
+```{r regression table combined_data14}
+# Create your regression table with modelsummary
+reg_table <- modelsummary(
+  models = list(
+  "Model 1: \n GVF" = lm1,
+  "Model 2: \n GVP" = lm2, 
+  "Model 3: \n PVF" = lm3, 
+  "Model 4: \n PVP" = lm4
+),
+  title = "The effect of Ethnic Voting and Inequality on Democracy",
+  gof_map = c("r.squared", "adj.r.squared", "nobs"),
+  align = "lcccc", # left-align first column, center others
+  coef_map = c(     # change order and names of coefs
+    "(Intercept)" = "Intercept", 
+    "lpolity2_norm" = "Lagged DV",
+    "lgvf" = "Ethnic Voting",
+    "lgvp" = "Ethnic Voting",
+    "lpvf" = "Ethnic Voting",
+    "lpvp" = "Ethnic Voting",
+    "bgi" = "Horizontal Inequality",
+    "lgvf:bgi" = "EV * HI",
+    "lgvp:bgi" = "EV * HI",
+    "lpvf:bgi" = "EV * HI",
+    "lpvp:bgi" = "EV * HI",
+    "llngdppc" = "GDP p.c.",
+    "lgrowth" = "Growth",
+    "oil" = "Oil",
+    "lethnici" = "Ethnic fractionalization",
+    "lreligioni" = "Religious fractionalization",
+    "lmoslemi" = "Muslim",
+    "lproti" = "Protestant",
+    "lbritcoli" = "British colony",
+    "lnewci" = "New country",
+    "pr" = "PR",
+    "federalism" = "Federalism",
+    "lage" = "Age",
+    "western" = "Western",
+    "lworld_polity" = "World Democracy",
+    "lb_dum" = "LB",
+    "ab_dum" = "AB",
+    "cses_dum" = "CSES",
+    "dec90" = "1990s",
+    "dec2000" = "2000s",
+    "EP_std" = "EP",
+    "ELF_std" = "ELF",
+    "polity2_std" = "polity",
+    "lngdp_std" = "GDP"
+  ),
+  stars = TRUE # include p-values
+) %>%
+  kableExtra::add_header_above(
+    c(" " = 1, # nothing in column 1
+      "DV: Polity Score" = 4),
+    bold = FALSE,
+    italic = TRUE) %>%
+  kableExtra::column_spec(2:5, width = "2cm") # set the size of 2-6 columns in table to 2 cm
+
+print(reg_table)
+
+# Save the table as an HTML file
+save_kable(reg_table, file = "regression_table1.html")
+```
+
+
+##Alternative democracy measure (Vdem)
+```{r regression: combined_data14; v2x_polyarchy}
+lm1 <- lm(v2x_polyarchy ~ lgvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+lm2 <- lm(v2x_polyarchy ~ lgvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+lm3 <- lm(v2x_polyarchy ~ lpvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+lm4 <- lm(v2x_polyarchy ~ lpvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+table_summary <- modelsummary(list(lm1, lm2, lm3, lm4), stars = TRUE)
+print(table_summary)
+```
+
+```{r regression table combined_data14; v2x_polyarchy}
+# Create your regression table with modelsummary
+reg_table <- modelsummary(
+  models = list(
+  "Model 1: \n GVF" = lm1,
+  "Model 2: \n GVP" = lm2, 
+  "Model 3: \n PVF" = lm3, 
+  "Model 4: \n PVP" = lm4
+),
+  title = "The effect of Ethnic Voting on Democracy",
+  gof_map = c("r.squared", "adj.r.squared", "nobs"),
+  align = "lcccc", # left-align first column, center others
+  coef_map = c(     # change order and names of coefs
+    "(Intercept)" = "Intercept", 
+    "lpolity2_norm" = "Lagged DV",
+    "lgvf" = "Ethnic Voting",
+    "lgvp" = "Ethnic Voting",
+    "lpvf" = "Ethnic Voting",
+    "lpvp" = "Ethnic Voting",
+    "bgi" = "Horizontal Inequality",
+    "lgvf:bgi" = "EV * HI",
+    "lgvp:bgi" = "EV * HI",
+    "lpvf:bgi" = "EV * HI",
+    "lpvp:bgi" = "EV * HI",
+    "llngdppc" = "GDP p.c.",
+    "lgrowth" = "Growth",
+    "oil" = "Oil",
+    "lethnici" = "Ethnic fractionalization",
+    "lreligioni" = "Religious fractionalization",
+    "lmoslemi" = "Muslim",
+    "lproti" = "Protestant",
+    "lbritcoli" = "British colony",
+    "lnewci" = "New country",
+    "pr" = "PR",
+    "federalism" = "Federalism",
+    "lage" = "Age",
+    "western" = "Western",
+    "lworld_polity" = "World Democracy",
+    "lb_dum" = "LB",
+    "ab_dum" = "AB",
+    "cses_dum" = "CSES",
+    "dec90" = "1990s",
+    "dec2000" = "2000s",
+    "EP_std" = "EP",
+    "ELF_std" = "ELF",
+    "polity2_std" = "polity",
+    "lngdp_std" = "GDP"
+  ),
+  stars = TRUE # include p-values
+) %>%
+  kableExtra::add_header_above(
+    c(" " = 1, # nothing in column 1
+      "DV: V2X Polyarchy" = 4),
+    bold = FALSE,
+    italic = TRUE) %>%
+  kableExtra::column_spec(2:5, width = "2cm") # set the size of 2-6 columns in table to 2 cm
+
+print(reg_table)
+
+# Save the table as an HTML file
+save_kable(reg_table, file = "regression_table3.html")
+```
+
+
+##Marginal effects plot
+```{r marginal effects plot}
+#Had to do it like this because otherwise it wouldn't work
+if (!requireNamespace("ggeffects", quietly = TRUE)) install.packages("ggeffects")
+library(ggeffects)
+
+
+# Define a function to generate and customize plots with confidence intervals
+create_plot <- function(model_formula, predictor, bgi_values, data, x_label) {
+  model <- lm(model_formula, data = data)
+  # Explicitly generate a sequence from 0 to 1 for predictor
+  marginal_effects <- ggpredict(model, terms = c(paste0(predictor, " [0:1 by=0.1]"), paste0("bgi [", paste(bgi_values, collapse = ", "), "]")))
+  
+  # Plot with confidence intervals
+  ggplot(marginal_effects, aes(x = x, y = predicted, color = factor(group), fill = factor(group))) +
+    geom_line(size = 1) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+    geom_hline(yintercept = 1, linetype = "dotted") + # Add dotted line at y = 1
+    labs(
+      x = x_label,
+      y = "Democracy"
+    ) +
+    scale_x_continuous(limits = c(0, 1)) +
+    scale_y_continuous(limits = c(0, 1.7)) +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# Create individual plots with updated x-axis labels and confidence intervals
+plot1 <- create_plot(v2x_polyarchy ~ lgvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, "lgvf", c(0, 0.33, 0.66, 1), combined_data14, "Ethnic Voting (GVF)")
+plot2 <- create_plot(v2x_polyarchy ~ lgvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, "lgvp", c(0, 0.33, 0.66, 1), combined_data14, "Ethnic Voting (GVP)")
+plot3 <- create_plot(v2x_polyarchy ~ lpvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, "lpvf", c(0, 0.33, 0.66, 1), combined_data14, "Ethnic Voting (PVF)")
+plot4 <- create_plot(v2x_polyarchy ~ lpvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, "lpvp", c(0, 0.33, 0.66, 1), combined_data14, "Ethnic Voting (PVP)")
+
+# Extract the legend from one of the plots
+marginal_effects1 <- ggpredict(lm(v2x_polyarchy ~ lgvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14), terms = c("lgvf [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]", "bgi [0, 0.33, 0.66, 1]"))
+legend_plot <- ggplot(marginal_effects1, aes(x = x, y = predicted, color = factor(group), fill = factor(group))) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2) +
+  labs(
+    color = "Horizontal Inequality",
+    fill = "Horizontal Inequality"
+  ) +
+  scale_color_manual(values = c("0" = "red", "0.33" = "green", "0.66" = "blue", "1" = "purple")) +
+  scale_fill_manual(values = c("0" = "red", "0.33" = "green", "0.66" = "blue", "1" = "purple")) +
+  theme_minimal()
+
+legend <- get_legend(legend_plot)
+
+# Arrange the plots in a grid using plot_grid
+combined_plot <- plot_grid(plot1 + theme(legend.position = "none"),
+                           plot2 + theme(legend.position = "none"),
+                           plot3 + theme(legend.position = "none"),
+                           plot4 + theme(legend.position = "none"),
+                           ncol = 2)
+
+# Add the legend to the right of the combined plot
+final_plot <- plot_grid(combined_plot, legend, ncol = 2, rel_widths = c(1, 0.4))
+
+# Add a title to the combined plot
+title <- ggdraw() + 
+  draw_label(
+    "Marginal Effects of Ethnic Voting on Democracy by Horizontal Inequality",
+    fontface = 'bold',
+    x = 0.5,
+    hjust = 0.5
+  )
+
+# Combine title and plot
+plot_grid(title, final_plot, ncol = 1, rel_heights = c(0.1, 1))
+
+```
+
+
+##Fixed effects
+
+```{r regression: combined_data14; v2x_polyarchy, fixed effects}
+# Assuming 'country' is the variable that identifies countries in your dataset
+lm1 <- lm(v2x_polyarchy ~ lgvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000 + factor(country), data = combined_data14)
+
+lm2 <- lm(v2x_polyarchy ~ lgvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000 + factor(country), data = combined_data14)
+
+lm3 <- lm(v2x_polyarchy ~ lpvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000 + factor(country), data = combined_data14)
+
+lm4 <- lm(v2x_polyarchy ~ lpvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000 + factor(country), data = combined_data14)
+
+
+# Summarize the models
+table_summary <- modelsummary(list(lm1, lm2, lm3, lm4), stars = TRUE)
+print(table_summary)
+```
+
+```{r regression table combined_data14; v2x_polyarchy, fixed effects}
+# Create your regression table with modelsummary
+reg_table <- modelsummary(
+  models = list(
+  "Model 1: \n GVF" = lm1,
+  "Model 2: \n GVP" = lm2, 
+  "Model 3: \n PVF" = lm3, 
+  "Model 4: \n PVP" = lm4
+),
+  title = "The effect of Ethnic Voting and Inequality on Democracy, fixed effects",
+  gof_map = c("r.squared", "adj.r.squared", "nobs"),
+  align = "lcccc", # left-align first column, center others
+  coef_map = c(     # change order and names of coefs
+    "(Intercept)" = "Intercept", 
+    "lpolity2_norm" = "Lagged DV",
+    "lgvf" = "Ethnic Voting",
+    "lgvp" = "Ethnic Voting",
+    "lpvf" = "Ethnic Voting",
+    "lpvp" = "Ethnic Voting",
+    "bgi" = "Horizontal Inequality",
+    "lgvf:bgi" = "EV * HI",
+    "lgvp:bgi" = "EV * HI",
+    "lpvf:bgi" = "EV * HI",
+    "lpvp:bgi" = "EV * HI",
+    "llngdppc" = "GDP p.c.",
+    "lgrowth" = "Growth",
+    "oil" = "Oil",
+    "lethnici" = "Ethnic fractionalization",
+    "lreligioni" = "Religious fractionalization",
+    "lmoslemi" = "Muslim",
+    "lproti" = "Protestant",
+    "lbritcoli" = "British colony",
+    "lnewci" = "New country",
+    "pr" = "PR",
+    "federalism" = "Federalism",
+    "lage" = "Age",
+    "western" = "Western",
+    "lworld_polity" = "World Democracy",
+    "lb_dum" = "LB",
+    "ab_dum" = "AB",
+    "cses_dum" = "CSES",
+    "dec90" = "1990s",
+    "dec2000" = "2000s",
+    "EP_std" = "EP",
+    "ELF_std" = "ELF",
+    "polity2_std" = "polity",
+    "lngdp_std" = "GDP"
+  ),
+  stars = TRUE # include p-values
+) %>%
+  kableExtra::add_header_above(
+    c(" " = 1, # nothing in column 1
+      "DV: V2X Polyarchy" = 4),
+    bold = FALSE,
+    italic = TRUE) %>%
+  kableExtra::column_spec(2:5, width = "2cm") # set the size of 2-6 columns in table to 2 cm
+
+print(reg_table)
+
+# Save the table as an HTML file
+save_kable(reg_table, file = "regression_table5.html")
+```
+
+
+##Lagged DV
+
+```{r regression: combined_data14; v2x_polyarchy, lagged dependent variable}
+lm1 <- lm(v2x_polyarchy ~ lagged_v2x_polyarchy + lgvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+lm2 <- lm(v2x_polyarchy ~ lagged_v2x_polyarchy + lgvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+lm3 <- lm(v2x_polyarchy ~ lagged_v2x_polyarchy + lpvf * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+lm4 <- lm(v2x_polyarchy ~ lagged_v2x_polyarchy + lpvp * bgi + llngdppc + lgrowth + oil + lethnici + lreligioni + lmoslemi + lproti + lbritcoli + lnewci + pr + federalism + lage + western + lworld_polity + lb_dum + ab_dum + cses_dum + dec90 + dec2000, data = combined_data14)
+
+table_summary <- modelsummary(list(lm1, lm2, lm3, lm4), stars = TRUE)
+print(table_summary)
+```
+
+```{r regression table combined_data14; v2x_polyarchy, lagged dv}
+# Create your regression table with modelsummary
+reg_table <- modelsummary(
+  models = list(
+  "Model 1: \n GVF" = lm1,
+  "Model 2: \n GVP" = lm2, 
+  "Model 3: \n PVF" = lm3, 
+  "Model 4: \n PVP" = lm4
+),
+  title = "The effect of Ethnic Voting and Inequality on Democracy, fixed effects",
+  gof_map = c("r.squared", "adj.r.squared", "nobs"),
+  align = "lcccc", # left-align first column, center others
+  coef_map = c(     # change order and names of coefs
+    "(Intercept)" = "Intercept", 
+    "lpolity2_norm" = "Lagged DV",
+    "lagged_v2x_polyarchy" = "Lagged DV",
+    "lgvf" = "Ethnic Voting",
+    "lgvp" = "Ethnic Voting",
+    "lpvf" = "Ethnic Voting",
+    "lpvp" = "Ethnic Voting",
+    "bgi" = "Horizontal Inequality",
+    "lgvf:bgi" = "EV * HI",
+    "lgvp:bgi" = "EV * HI",
+    "lpvf:bgi" = "EV * HI",
+    "lpvp:bgi" = "EV * HI",
+    "llngdppc" = "GDP p.c.",
+    "lgrowth" = "Growth",
+    "oil" = "Oil",
+    "lethnici" = "Ethnic fractionalization",
+    "lreligioni" = "Religious fractionalization",
+    "lmoslemi" = "Muslim",
+    "lproti" = "Protestant",
+    "lbritcoli" = "British colony",
+    "lnewci" = "New country",
+    "pr" = "PR",
+    "federalism" = "Federalism",
+    "lage" = "Age",
+    "western" = "Western",
+    "lworld_polity" = "World Democracy",
+    "lb_dum" = "LB",
+    "ab_dum" = "AB",
+    "cses_dum" = "CSES",
+    "dec90" = "1990s",
+    "dec2000" = "2000s",
+    "EP_std" = "EP",
+    "ELF_std" = "ELF",
+    "polity2_std" = "polity",
+    "lngdp_std" = "GDP"
+  ),
+  stars = TRUE # include p-values
+) %>%
+  kableExtra::add_header_above(
+    c(" " = 1, # nothing in column 1
+      "DV: V2X Polyarchy" = 4),
+    bold = FALSE,
+    italic = TRUE) %>%
+  kableExtra::column_spec(2:5, width = "2cm") # set the size of 2-6 columns in table to 2 cm
+
+print(reg_table)
+
+# Save the table as an HTML file
+save_kable(reg_table, file = "regression_table8.html")
+```
+
+
+
