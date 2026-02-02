@@ -1,4 +1,4 @@
-This is the replication Code and Data for the Paper "Effects of Ethnic Voting and Inequality on Democracy" (Bergstein, 2024) 
+This is the replication Code and Data for the Paper "Effects of Ethnic Voting and Inequality on Democracy" (Bergstein, 2025) 
 The paper can be accessed here: https://doi.org/10.33063/pbj.v12i2025.704
 
 Abstract:
